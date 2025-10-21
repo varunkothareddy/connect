@@ -23,7 +23,7 @@ console.log('>>> EXPRESS APP INITIALIZED <<<');
 
 
 // =================================================================
-// 🚨 CRITICAL FIX 1: Consolidated Database Connection
+// CRITICAL FIX 1: Consolidated Database Connection
 // =================================================================
 // Define the MongoDB connection URI. Use MONGO_URI from Render environment variables.
 const MONGODB_URI = process.env.MONGO_URI; 
@@ -259,33 +259,34 @@ app.post('/api/join', authMiddleware, async (req, res) => {
               return res.status(400).json({ message: 'Mobile number must be 10 digits.' });
         }
 
-        // Use findOneAndUpdate with upsert
-        const result = await Worker.findOneAndUpdate(
+        // 🚨 CRITICAL FIX: Removed 'rawResult: true' and simplified logic
+        const workerProfile = await Worker.findOneAndUpdate(
             { createdBy: userId }, 
             { $set: { name, mobile, location, workType, createdBy: userId } }, 
-            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true, rawResult: true } 
+            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true } // Removed rawResult
         );
 
-        if (result.ok) { 
-            if (result.lastErrorObject.upserted) {
-                console.log('[POST /api/join] Profile created for user:', userId);
-                res.status(201).json({ message: 'Profile created successfully!' });
-            } else {
-                  console.log('[POST /api/join] Profile updated (or matched) for user:', userId);
-                  res.status(200).json({ message: 'Profile updated successfully!' });
-            }
+        if (workerProfile) {
+            // Check if the document was newly created (upserted) or updated (matched)
+            // Note: Mongoose does not easily tell you if a document was created vs updated without rawResult
+            // We assume success if a document is returned.
+            console.log('[POST /api/join] Profile updated/created successfully for user:', userId);
+            res.status(200).json({ message: 'Profile updated successfully!' });
         } else {
-              console.error('[POST /api/join] DB findOneAndUpdate failed unexpectedly for user:', userId, result);
-              res.status(500).json({ message: 'Failed to save profile due to unexpected database error.' });
+            // This case should be very rare if the database is online
+            console.error('[POST /api/join] DB findOneAndUpdate failed to return document for user:', userId);
+            res.status(500).json({ message: 'Server could not confirm profile save.' });
         }
 
     } catch (err) {
+        // 🔑 THIS CATCH BLOCK IS NOW RELIABLE: It will now show the Mongoose or MongoDB error 
         console.error('--- JOIN ERROR ---', err);
         if (err.name === 'ValidationError') {
             const messages = Object.values(err.errors).map(val => val.message);
             return res.status(400).json({ message: messages.join(', ') });
         }
-        res.status(500).json({ message: 'Server error saving profile.' });
+        // Send a clearer message for non-validation errors
+        res.status(500).json({ message: 'Database query failed. Check Render logs for the Mongoose/MongoDB error.' });
     }
 });
 
@@ -328,7 +329,7 @@ app.get('/api/search', authMiddleware, async (req, res) => {
 });
 
 // =================================================================
-// 🚨 CRITICAL FIX 2: Correct Port Binding
+// CRITICAL FIX 2: Correct Port Binding
 // =================================================================
 // Use the port provided by the hosting environment (Render), or fallback for local development
 const PORT = process.env.PORT || 3000;
