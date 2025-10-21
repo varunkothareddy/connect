@@ -9,8 +9,8 @@ const cors = require('cors');
 
 // --- APP INITIALIZATION ---
 const app = express();
-app.use(cors()); // Allow all origins for simplicity in development
-app.use(express.json()); // Middleware to parse JSON bodies
+app.use(cors()); 
+app.use(express.json()); 
 console.log('>>> EXPRESS APP INITIALIZED <<<');
 
 
@@ -18,7 +18,6 @@ console.log('>>> EXPRESS APP INITIALIZED <<<');
 // 1. DATABASE CONNECTION
 // =================================================================
 const MONGODB_URI = process.env.MONGO_URI; 
-// *** IMPORTANT: Set a strong, unique value for JWT_SECRET in your Render environment variables. ***
 const JWT_SECRET = process.env.JWT_SECRET || 'your_default_secret_key'; 
 
 if (!MONGODB_URI) {
@@ -52,7 +51,7 @@ const workerSchema = new mongoose.Schema({
     mobile: { type: String, required: true, minlength: 10, maxlength: 10 },
     location: { type: String, required: true },
     workType: { type: String, required: true },
-    subWorkType: { type: String, default: '' } // <-- NEW FIELD ADDED
+    subWorkType: { type: String, default: '' }
 });
 const Worker = mongoose.model('Worker', workerSchema);
 
@@ -62,7 +61,6 @@ const Worker = mongoose.model('Worker', workerSchema);
 // =================================================================
 
 const authMiddleware = (req, res, next) => {
-    // Check for token in 'Authorization: Bearer <token>' header
     const token = req.header('Authorization')?.replace('Bearer ', '');
 
     if (!token) {
@@ -100,10 +98,9 @@ app.post('/api/register', async (req, res) => {
         user = new User({ mobile, password: hashedPassword, name });
         await user.save();
         
-        // FIX: Ensure the user's name is in the token payload and the response body
         const token = jwt.sign({ userId: user._id, name: user.name, mobile: user.mobile }, JWT_SECRET, { expiresIn: '7d' });
 
-        res.status(201).json({ token: token, name: user.name }); // <-- FIXED RESPONSE STRUCTURE
+        res.status(201).json({ token: token, name: user.name });
 
     } catch (err) {
         console.error('--- REGISTRATION ERROR ---', err);
@@ -122,10 +119,9 @@ app.post('/api/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) { return res.status(400).json({ message: 'Invalid mobile or password.' }); }
 
-        // FIX: Ensure the user's name is in the token payload and the response body
         const token = jwt.sign({ userId: user._id, name: user.name, mobile: user.mobile }, JWT_SECRET, { expiresIn: '7d' });
         
-        res.status(200).json({ token: token, name: user.name }); // <-- FIXED RESPONSE STRUCTURE
+        res.status(200).json({ token: token, name: user.name });
 
     } catch (err) {
         console.error('--- LOGIN ERROR ---', err);
@@ -143,7 +139,6 @@ app.post('/api/login', async (req, res) => {
 // JOIN ROUTE (POST /api/join) - Protected
 app.post('/api/join', authMiddleware, async (req, res) => {
     try {
-        // EXTRACT NEW FIELD: subWorkType
         const { name, mobile, location, workType, subWorkType } = req.body; 
         const createdBy = req.user.userId;
 
@@ -154,9 +149,9 @@ app.post('/api/join', authMiddleware, async (req, res) => {
             worker.mobile = mobile;
             worker.location = location;
             worker.workType = workType;
-            worker.subWorkType = subWorkType; // <-- SAVE NEW FIELD
+            worker.subWorkType = subWorkType; 
         } else {
-            worker = new Worker({ createdBy, name, mobile, location, workType, subWorkType }); // <-- SAVE NEW FIELD
+            worker = new Worker({ createdBy, name, mobile, location, workType, subWorkType }); 
         }
         
         await worker.save();
@@ -172,20 +167,26 @@ app.post('/api/join', authMiddleware, async (req, res) => {
 // SEARCH ROUTE (GET /api/search) - Protected
 app.get('/api/search', authMiddleware, async (req, res) => {
     try {
-        // EXTRACT NEW FIELD: subWorkType
         const { location, workType, subWorkType } = req.query; 
         let searchQuery = {};
 
+        // 1. LOCATION search (Case-insensitive)
         if (location) { searchQuery.location = new RegExp(location, 'i'); }
-        if (workType && workType !== 'all') { searchQuery.workType = workType; }
-        // NEW: Search by Sub-Work Type
-        if (subWorkType && subWorkType !== 'all' && subWorkType !== '') { searchQuery.subWorkType = subWorkType; }
+        
+        // 2. WORK TYPE search (Case-insensitive)
+        if (workType && workType !== 'all') { 
+            searchQuery.workType = new RegExp(workType, 'i'); // <-- FIX: Use case-insensitive RegExp
+        }
+        
+        // 3. SUB-WORK TYPE search (Case-insensitive)
+        if (subWorkType && subWorkType !== 'all' && subWorkType !== '') { 
+            searchQuery.subWorkType = new RegExp(subWorkType, 'i'); // <-- FIX: Use case-insensitive RegExp
+        }
 
         if (Object.keys(searchQuery).length === 0) {
               return res.status(400).json({ message: 'Please provide search criteria (location, work type, or specialty).' });
         }
         
-        // NEW: Select subWorkType to return in results
         const workers = await Worker.find(searchQuery).select('name mobile location workType subWorkType -createdBy -__v');
 
         if (workers.length === 0) {
@@ -195,7 +196,8 @@ app.get('/api/search', authMiddleware, async (req, res) => {
         res.status(200).json(workers); 
 
     } catch (err) {
-        console.error('--- SEARCH ERROR ---', err);
+        // This is the error handler that caught the 500. Log the full error for debugging.
+        console.error('--- SEARCH ERROR TRACE ---', err.stack || err.message);
         res.status(500).json({ message: 'Server error during search.' });
     }
 });
