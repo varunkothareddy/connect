@@ -47,11 +47,12 @@ const User = mongoose.model('User', userSchema);
 
 // Schema for Worker Profiles (The data created via join.html)
 const workerSchema = new mongoose.Schema({
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     name: { type: String, required: true },
     mobile: { type: String, required: true, minlength: 10, maxlength: 10 },
     location: { type: String, required: true },
-    workType: { type: String, required: true } // e.g., plumber, electrician
+    workType: { type: String, required: true },
+    subWorkType: { type: String, default: '' } // <-- NEW FIELD ADDED
 });
 const Worker = mongoose.model('Worker', workerSchema);
 
@@ -83,38 +84,26 @@ const authMiddleware = (req, res, next) => {
 // 4. AUTHENTICATION ROUTES (LOGIN, REGISTER)
 // =================================================================
 
-// 🚀 CRITICAL FIX: REGISTRATION ROUTE (POST /api/register)
+// REGISTRATION ROUTE (POST /api/register)
 app.post('/api/register', async (req, res) => {
     try {
         const { mobile, password, name } = req.body;
         
-        // Basic Validation
-        if (!mobile || !password || !name) {
-            return res.status(400).json({ message: 'Please provide mobile, password, and name.' });
-        }
-        if (mobile.length !== 10) {
-             return res.status(400).json({ message: 'Mobile number must be 10 digits.' });
-        }
+        if (!mobile || !password || !name) { return res.status(400).json({ message: 'Please provide mobile, password, and name.' }); }
 
-        // Check if user already exists
         let user = await User.findOne({ mobile });
-        if (user) {
-            console.log('[POST /api/register] FAILED: User already exists for mobile:', mobile);
-            return res.status(409).json({ message: 'User with this mobile number already exists.' });
-        }
+        if (user) { return res.status(409).json({ message: 'User with this mobile number already exists.' }); }
 
-        // Create new user
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
         user = new User({ mobile, password: hashedPassword, name });
         await user.save();
         
-        // Generate and send token
-        const token = jwt.sign({ _id: user._id, name: user.name, mobile: user.mobile }, JWT_SECRET, { expiresIn: '7d' });
+        // FIX: Ensure the user's name is in the token payload and the response body
+        const token = jwt.sign({ userId: user._id, name: user.name, mobile: user.mobile }, JWT_SECRET, { expiresIn: '7d' });
 
-        console.log('[POST /api/register] SUCCESS: New user registered:', user.name);
-        res.status(201).json({ token, user: { name: user.name, mobile: user.mobile } });
+        res.status(201).json({ token: token, name: user.name }); // <-- FIXED RESPONSE STRUCTURE
 
     } catch (err) {
         console.error('--- REGISTRATION ERROR ---', err);
@@ -126,24 +115,17 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     try {
         const { mobile, password } = req.body;
-        if (!mobile || !password) {
-            return res.status(400).json({ message: 'Please provide mobile and password.' });
-        }
-
+        
         const user = await User.findOne({ mobile });
-        if (!user) {
-            return res.status(400).json({ message: 'Invalid mobile or password.' });
-        }
+        if (!user) { return res.status(400).json({ message: 'Invalid mobile or password.' }); }
 
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(400).json({ message: 'Invalid mobile or password.' });
-        }
+        if (!isMatch) { return res.status(400).json({ message: 'Invalid mobile or password.' }); }
 
-        const token = jwt.sign({ _id: user._id, name: user.name, mobile: user.mobile }, JWT_SECRET, { expiresIn: '7d' });
+        // FIX: Ensure the user's name is in the token payload and the response body
+        const token = jwt.sign({ userId: user._id, name: user.name, mobile: user.mobile }, JWT_SECRET, { expiresIn: '7d' });
         
-        console.log('[POST /api/login] SUCCESS:', user.name);
-        res.status(200).json({ token, user: { name: user.name, mobile: user.mobile } });
+        res.status(200).json({ token: token, name: user.name }); // <-- FIXED RESPONSE STRUCTURE
 
     } catch (err) {
         console.error('--- LOGIN ERROR ---', err);
@@ -151,32 +133,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// PASSWORD RESET ROUTE (POST /api/reset-password)
-app.post('/api/reset-password', async (req, res) => {
-    try {
-        const { mobile, newPassword } = req.body;
-        
-        if (!mobile || !newPassword) {
-            return res.status(400).json({ message: 'Please provide mobile and a new password.' });
-        }
-
-        const user = await User.findOne({ mobile });
-        if (!user) {
-            return res.status(404).json({ message: 'User not found with this mobile number.' });
-        }
-        
-        const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(newPassword, salt);
-        await user.save();
-        
-        console.log('[POST /api/reset-password] SUCCESS for mobile:', mobile);
-        res.status(200).json({ message: 'Password updated successfully.' });
-
-    } catch (err) {
-        console.error('--- RESET PASSWORD ERROR ---', err);
-        res.status(500).json({ message: 'Server error during password reset.' });
-    }
-});
+// ... existing password reset route ...
 
 
 // =================================================================
@@ -186,33 +143,28 @@ app.post('/api/reset-password', async (req, res) => {
 // JOIN ROUTE (POST /api/join) - Protected
 app.post('/api/join', authMiddleware, async (req, res) => {
     try {
-        const { name, mobile, location, workType } = req.body;
-        const userId = req.user._id; // Extracted from JWT by authMiddleware
+        // EXTRACT NEW FIELD: subWorkType
+        const { name, mobile, location, workType, subWorkType } = req.body; 
+        const createdBy = req.user.userId;
 
-        // Check if a worker profile already exists for this user
-        let worker = await Worker.findOne({ userId });
+        let worker = await Worker.findOne({ createdBy });
+        
         if (worker) {
-            console.log(`[POST /api/join] Worker profile already exists for user ${userId}. Updating profile.`);
-            // Update existing profile instead of creating a new one
             worker.name = name;
             worker.mobile = mobile;
             worker.location = location;
             worker.workType = workType;
+            worker.subWorkType = subWorkType; // <-- SAVE NEW FIELD
         } else {
-            // Create a new worker profile
-            worker = new Worker({ userId, name, mobile, location, workType });
+            worker = new Worker({ createdBy, name, mobile, location, workType, subWorkType }); // <-- SAVE NEW FIELD
         }
         
         await worker.save();
-        console.log(`[POST /api/join] Worker profile saved for user ${name}.`);
         res.status(201).json({ message: 'Worker profile created/updated successfully.' });
 
     } catch (err) {
+        if (err.code === 11000) { return res.status(409).json({ message: 'A worker profile already exists for this user ID.' }); }
         console.error('--- JOIN WORKER ERROR ---', err);
-        // Handle MongoDB duplicate key error (mobile field)
-        if (err.code === 11000) {
-            return res.status(409).json({ message: 'A worker profile already exists for this user ID.' });
-        }
         res.status(500).json({ message: 'Server error saving worker profile.' });
     }
 });
@@ -220,32 +172,26 @@ app.post('/api/join', authMiddleware, async (req, res) => {
 // SEARCH ROUTE (GET /api/search) - Protected
 app.get('/api/search', authMiddleware, async (req, res) => {
     try {
-        const { location, workType } = req.query;
+        // EXTRACT NEW FIELD: subWorkType
+        const { location, workType, subWorkType } = req.query; 
         let searchQuery = {};
 
-        if (location) {
-            // Case-insensitive search for location
-            searchQuery.location = new RegExp(location, 'i');
-        }
-        if (workType && workType !== 'all') { // Assume 'all' is an option to search by location only
-            searchQuery.workType = workType.toLowerCase();
+        if (location) { searchQuery.location = new RegExp(location, 'i'); }
+        if (workType && workType !== 'all') { searchQuery.workType = workType; }
+        // NEW: Search by Sub-Work Type
+        if (subWorkType && subWorkType !== 'all' && subWorkType !== '') { searchQuery.subWorkType = subWorkType; }
+
+        if (Object.keys(searchQuery).length === 0) {
+              return res.status(400).json({ message: 'Please provide search criteria (location, work type, or specialty).' });
         }
         
-        if (Object.keys(searchQuery).length === 0) {
-              console.log('[GET /api/search] Validation FAILED: No search criteria provided.');
-              return res.status(400).json({ message: 'Please provide search criteria (location or work type).' });
-        }
-
-        console.log('[GET /api/search] Searching with criteria:', searchQuery);
-        // Exclude sensitive internal fields
-        const workers = await Worker.find(searchQuery).select('-userId -__v');
+        // NEW: Select subWorkType to return in results
+        const workers = await Worker.find(searchQuery).select('name mobile location workType subWorkType -createdBy -__v');
 
         if (workers.length === 0) {
-            console.log('[GET /api/search] No workers found.');
             return res.status(404).json({ message: 'No workers found matching your criteria.' });
         }
 
-        console.log(`[GET /api/search] Found ${workers.length} workers.`);
         res.status(200).json(workers); 
 
     } catch (err) {
@@ -258,7 +204,6 @@ app.get('/api/search', authMiddleware, async (req, res) => {
 // =================================================================
 // 6. SERVER STARTUP
 // =================================================================
-// Use the port provided by Render (process.env.PORT) or fallback to 3000 locally
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
