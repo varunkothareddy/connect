@@ -11,26 +11,48 @@ const cors = require('cors');
 console.log('>>> MODULES LOADED <<<');
 
 const app = express();
-app.use(cors());
+// IMPORTANT: Configure CORS to allow access from your specific frontend URL on Vercel/Netlify
+// For initial testing, you can leave it as app.use(cors()) but for production, restrict it:
+// const allowedOrigins = ['https://your-frontend-name.vercel.app']; 
+// app.use(cors({ origin: allowedOrigins }));
+app.use(cors()); 
 app.use(express.json());
 
 // --- NEW LOG ---
 console.log('>>> EXPRESS APP INITIALIZED <<<');
 
 
-// --- Database Connection ---
-const MONGO_URI = 'mongodb://localhost:27017/weconnectyou';
-mongoose.connect(MONGO_URI)
-    .then(() => console.log('MongoDB connected successfully!'))
-    .catch(err => {
-        console.error('Initial MongoDB connection error:', err);
-        process.exit(1); // Exit if cannot connect initially
-    });
+// =================================================================
+// 🚨 CRITICAL FIX 1: Consolidated Database Connection
+// =================================================================
+// Define the MongoDB connection URI. Use MONGO_URI from Render environment variables.
+const MONGODB_URI = process.env.MONGO_URI; 
+
+if (!MONGODB_URI) {
+    console.error('FATAL ERROR: MONGO_URI is not defined in Render Environment Variables.');
+    // Exit if the connection string is missing entirely, as the app is unusable.
+    process.exit(1); 
+}
+
+// Connect to MongoDB using the environment variable URI (ONLY ONCE)
+mongoose.connect(MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+})
+.then(() => console.log('>>> MongoDB Connected SUCCESSFULLY <<<'))
+.catch(err => {
+    // This catches the MongooseServerSelectionError if the connection fails
+    console.error('Initial MongoDB connection error. Check Atlas IP/URI/Credentials:', err);
+    // Exit the process so Render knows the service failed and will attempt a restart.
+    process.exit(1); 
+});
 
 // Added listener for runtime errors after initial connection
 mongoose.connection.on('error', err => {
   console.error('MongoDB runtime connection error:', err);
 });
+// =================================================================
+
 
 // --- Schemas ---
 const UserSchema = new mongoose.Schema({
@@ -42,7 +64,7 @@ const UserSchema = new mongoose.Schema({
         match: [/^[0-9]{10}$/, 'Mobile number must be 10 digits']
     },
     password: { type: String, required: [true, 'Password is required'] }
-}, { timestamps: true }); // Added timestamps for User if needed later
+}, { timestamps: true }); 
 const User = mongoose.model('User', UserSchema);
 
 const WorkerSchema = new mongoose.Schema({
@@ -55,7 +77,7 @@ const WorkerSchema = new mongoose.Schema({
     location: { type: String, required: [true, 'Location is required'] },
     workType: { type: String, required: [true, 'Work type is required'] },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
-}, { timestamps: true }); // Timestamps added here
+}, { timestamps: true }); 
 const Worker = mongoose.model('Worker', WorkerSchema);
 
 // --- JWT Secret & Middleware ---
@@ -63,23 +85,23 @@ const Worker = mongoose.model('Worker', WorkerSchema);
 const JWT_SECRET = 'my-super-secret-key-for-this-12k-project-CHANGE-THIS-LATER';
 
 const authMiddleware = (req, res, next) => {
-    console.log('--- Auth Middleware Running ---'); // Debug log
+    console.log('--- Auth Middleware Running ---'); 
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Format: "Bearer TOKEN"
+    const token = authHeader && authHeader.split(' ')[1]; 
 
     if (token == null) {
-        console.log('Auth Middleware: No token provided'); // Debug log
+        console.log('Auth Middleware: No token provided'); 
         return res.status(401).json({ message: 'Access denied. No token provided.' });
     }
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = decoded; // Add user info { userId, mobile, name } to the request object
-        console.log('Auth Middleware: Token verified for user:', req.user.userId); // Debug log
-        next(); // Token is valid, proceed
+        req.user = decoded; 
+        console.log('Auth Middleware: Token verified for user:', req.user.userId); 
+        next(); 
     } catch (err) {
-        console.error("Auth Middleware: JWT Verification Error:", err.message); // Log the specific error
-        res.status(403).json({ message: 'Invalid or expired token.' }); // 403 Forbidden
+        console.error("Auth Middleware: JWT Verification Error:", err.message); 
+        res.status(403).json({ message: 'Invalid or expired token.' }); 
     }
 };
 
@@ -117,7 +139,7 @@ app.post('/api/register', async (req, res) => {
         const newUser = new User({ name, mobile, password: hashedPassword });
 
         console.log('[POST /api/register] Step 5: Saving user to database...');
-        await newUser.save(); // This might throw validation errors from the schema
+        await newUser.save(); 
 
         console.log('[POST /api/register] Step 6: User saved! Sending success response.');
         res.status(201).json({ message: 'User registered successfully! Please log in.' });
@@ -126,13 +148,10 @@ app.post('/api/register', async (req, res) => {
         // Log the full error for debugging on the server
         console.error('--- REGISTER ERROR ---', err);
 
-        // Send a more specific error message if it's a Mongoose validation error
         if (err.name === 'ValidationError') {
-            // Extract a cleaner message from Mongoose error
             const messages = Object.values(err.errors).map(val => val.message);
             return res.status(400).json({ message: messages.join(', ') });
         }
-        // Send a generic server error message for other errors
         res.status(500).json({ message: 'Server error during registration.' });
     }
 });
@@ -146,9 +165,8 @@ app.post('/api/login', async (req, res) => {
         if (!mobile || !password) {
             return res.status(400).json({ message: 'Mobile and password are required.' });
         }
-         if (!/^[0-9]{10}$/.test(mobile)) {
+          if (!/^[0-9]{10}$/.test(mobile)) {
              console.log('[POST /api/login] Validation FAILED: Invalid mobile format.');
-             // Use generic message for security
              return res.status(400).json({ message: 'Invalid mobile number or password.' });
         }
 
@@ -168,7 +186,7 @@ app.post('/api/login', async (req, res) => {
 
         console.log('[POST /api/login] Step 3: Generating token...');
         const payload = { userId: user._id, mobile: user.mobile, name: user.name };
-        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1d' }); // Token expires in 1 day
+        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1d' }); 
 
         console.log('[POST /api/login] Login successful for:', mobile);
         res.status(200).json({ token: token, name: user.name });
@@ -179,7 +197,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- NEW: RESET PASSWORD ROUTE ---
+// Reset Password Route
 app.post('/api/reset-password', async (req, res) => {
     console.log('[POST /api/reset-password] Received request');
     try {
@@ -190,41 +208,34 @@ app.post('/api/reset-password', async (req, res) => {
             return res.status(400).json({ message: 'Mobile number and new password are required.' });
         }
         if (!/^[0-9]{10}$/.test(mobile)) {
-             return res.status(400).json({ message: 'Mobile number must be 10 digits.' });
+              return res.status(400).json({ message: 'Mobile number must be 10 digits.' });
         }
-        // Add minimum password length validation if desired
         if (newPassword.length < 6) {
-             return res.status(400).json({ message: 'Password must be at least 6 characters.' });
+              return res.status(400).json({ message: 'Password must be at least 6 characters.' });
         }
 
         console.log('[POST /api/reset-password] Finding user:', mobile);
-        // Find the user by mobile number
         const user = await User.findOne({ mobile: mobile });
 
-        // If user doesn't exist
         if (!user) {
             console.log('[POST /api/reset-password] User not found:', mobile);
-            // Send a 404 Not Found status
             return res.status(404).json({ message: 'Account with this mobile number not found.' });
         }
 
         console.log('[POST /api/reset-password] Hashing new password for user:', user._id);
-        // Hash the new password
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(newPassword, salt);
 
         console.log('[POST /api/reset-password] Updating password in database...');
-        // Update the user's password in the database
         user.password = hashedPassword;
-        await user.save(); // Save the changes, this will also trigger validation if any
+        await user.save(); 
 
         console.log('[POST /api/reset-password] Password updated successfully for user:', user._id);
         res.status(200).json({ message: 'Password updated successfully!' });
 
     } catch (err) {
         console.error('--- RESET PASSWORD ERROR ---', err);
-        // Handle potential validation errors during save
-         if (err.name === 'ValidationError') {
+          if (err.name === 'ValidationError') {
             const messages = Object.values(err.errors).map(val => val.message);
             return res.status(400).json({ message: messages.join(', ') });
         }
@@ -235,42 +246,37 @@ app.post('/api/reset-password', async (req, res) => {
 
 // Join Route (Create/Update Worker Profile) - Protected by authMiddleware
 app.post('/api/join', authMiddleware, async (req, res) => {
-    // req.user is available here from the middleware
     console.log('[POST /api/join] Received request from user:', req.user.userId);
     try {
         const { name, mobile, location, workType } = req.body;
-        const userId = req.user.userId; // Get user ID from authenticated token
+        const userId = req.user.userId; 
 
         // Validation
         if (!name || !mobile || !location || !workType) {
             return res.status(400).json({ message: 'All profile fields (name, mobile, location, workType) are required.' });
         }
         if (!/^[0-9]{10}$/.test(mobile)) {
-             return res.status(400).json({ message: 'Mobile number must be 10 digits.' });
+              return res.status(400).json({ message: 'Mobile number must be 10 digits.' });
         }
 
         // Use findOneAndUpdate with upsert
         const result = await Worker.findOneAndUpdate(
-            { createdBy: userId }, // Find criteria: profile created by this user
-            { $set: { name, mobile, location, workType, createdBy: userId } }, // Data to set/update
-            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true, rawResult: true } // Added rawResult: true
+            { createdBy: userId }, 
+            { $set: { name, mobile, location, workType, createdBy: userId } }, 
+            { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true, rawResult: true } 
         );
 
-        // Check if the operation was successful using rawResult
-        if (result.ok) { // Check if the operation was successful
+        if (result.ok) { 
             if (result.lastErrorObject.upserted) {
-                // This means a new document was created (upserted)
                 console.log('[POST /api/join] Profile created for user:', userId);
                 res.status(201).json({ message: 'Profile created successfully!' });
             } else {
-                // This means an existing document was updated or matched but not changed
-                 console.log('[POST /api/join] Profile updated (or matched) for user:', userId);
-                 res.status(200).json({ message: 'Profile updated successfully!' });
+                  console.log('[POST /api/join] Profile updated (or matched) for user:', userId);
+                  res.status(200).json({ message: 'Profile updated successfully!' });
             }
         } else {
-             // This case indicates a database error during the operation
-             console.error('[POST /api/join] DB findOneAndUpdate failed unexpectedly for user:', userId, result);
-             res.status(500).json({ message: 'Failed to save profile due to unexpected database error.' });
+              console.error('[POST /api/join] DB findOneAndUpdate failed unexpectedly for user:', userId, result);
+              res.status(500).json({ message: 'Failed to save profile due to unexpected database error.' });
         }
 
     } catch (err) {
@@ -287,12 +293,11 @@ app.post('/api/join', authMiddleware, async (req, res) => {
 app.get('/api/search', authMiddleware, async (req, res) => {
     console.log('[GET /api/search] Received request from user:', req.user.userId);
     try {
-        const { location, workType } = req.query; // GET requests use req.query for parameters
+        const { location, workType } = req.query; 
         let searchQuery = {};
 
         // Build search query only if parameters are provided
         if (location) {
-            // Trim whitespace and use case-insensitive regex
             searchQuery.location = new RegExp(location.trim(), 'i');
         }
         if (workType) {
@@ -301,12 +306,11 @@ app.get('/api/search', authMiddleware, async (req, res) => {
 
         // Require at least one search parameter
         if (Object.keys(searchQuery).length === 0) {
-             console.log('[GET /api/search] Validation FAILED: No search criteria provided.');
-             return res.status(400).json({ message: 'Please provide search criteria (location or work type).' });
+              console.log('[GET /api/search] Validation FAILED: No search criteria provided.');
+              return res.status(400).json({ message: 'Please provide search criteria (location or work type).' });
         }
 
         console.log('[GET /api/search] Searching with criteria:', searchQuery);
-        // Find workers, exclude createdBy and __v fields from the result
         const workers = await Worker.find(searchQuery).select('-createdBy -__v');
 
         if (workers.length === 0) {
@@ -315,7 +319,7 @@ app.get('/api/search', authMiddleware, async (req, res) => {
         }
 
         console.log(`[GET /api/search] Found ${workers.length} workers.`);
-        res.status(200).json(workers); // Send the array of workers
+        res.status(200).json(workers); 
 
     } catch (err) {
         console.error('--- SEARCH ERROR ---', err);
@@ -323,9 +327,14 @@ app.get('/api/search', authMiddleware, async (req, res) => {
     }
 });
 
-// --- Start Server ---
+// =================================================================
+// 🚨 CRITICAL FIX 2: Correct Port Binding
+// =================================================================
+// Use the port provided by the hosting environment (Render), or fallback for local development
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-    console.log(`Backend server is running on http://localhost:${PORT}`);
+    console.log(`Backend server is running on port ${PORT}`);
     console.log('>>> SERVER LISTENING <<<');
-});
+}); 
+// =================================================================
